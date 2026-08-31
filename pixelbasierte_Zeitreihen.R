@@ -69,11 +69,6 @@ ggplot(
 
 
 
-#Daten nach den 9 Samples aufteilen
-sample_list <- split(
-  time_series,
-  time_series$id
-)
 
 
 #Funktion für BFAST Lite
@@ -103,6 +98,13 @@ run_bfast <- function(sample_data) {
   return(model)
 }
 
+#Daten auf Samples aufteilen
+sample_list <- split(
+  time_series,
+  time_series$id
+)
+
+
 #BFAST Lite auf alle 9 Samples anwenden
 bfast_results <- lapply(
   sample_list,
@@ -126,6 +128,7 @@ for (sample_name in names(bfast_results)) {
   
   plot(
     bfast_results[[sample_name]],
+    breaks ="LWZ",
     main = sample_name,
     xlab = "Jahr",
     ylab = "NDVI"
@@ -158,11 +161,16 @@ plot(
 #Breakpoints ausgeben
 get_break_dates <- function(model, sample_name, sample_type) {
   
-  # Von BFAST Lite erkannte Breakpoint-Positionen
-  bp <- model$breakpoints$breakpoints
+  # LWZ-Lösung explizit auswählen
+  bp_result <- strucchangeRcpp::breakpoints(
+    model$breakpoints,
+    breaks = "LWZ"
+  )
+  
+  bp <- bp_result$breakpoints
   
   
-  # Falls kein Break erkannt wurde
+  # Falls kein Breakpoint erkannt wurde
   if (length(bp) == 1 && is.na(bp)) {
     
     return(
@@ -175,25 +183,15 @@ get_break_dates <- function(model, sample_name, sample_type) {
   }
   
   
-  # Zeitpunkte der Breakpoints aus den von BFAST
-  # vorbereiteten Daten übernehmen
-  break_times <- model$data_pp$time[bp]
+  # Zeitpunkt aus den von BFAST Lite vorbereiteten Daten holen
+  break_time <- model$data_pp$time[bp]
   
-  
-  # Dezimaljahr in Jahr und Monat umwandeln
-  break_year <- floor(break_times)
+  break_year <- floor(
+    break_time
+  )
   
   break_month <- round(
-    (break_times - break_year) * 12
-  ) + 1
-  
-  
-  # Sicherheit für mögliche Rundung auf Monat 13
-  break_year <- break_year +
-    (break_month - 1) %/% 12
-  
-  break_month <- (
-    (break_month - 1) %% 12
+    (break_time - break_year) * 12
   ) + 1
   
   
@@ -207,30 +205,28 @@ get_break_dates <- function(model, sample_name, sample_type) {
   )
   
   
-  return(
-    data.frame(
-      id = sample_name,
-      type = sample_type,
-      break_date = break_date
-    )
+  data.frame(
+    id = sample_name,
+    type = sample_type,
+    break_date = break_date
   )
 }
+
 
 # Leere Liste für Ergebnisse
 break_list <- list()
 
-
 for (sample_name in names(bfast_results)) {
   
-  sample_type <- sample_list[[sample_name]]$type[1]
+  sample_type <- as.character(
+    sample_list[[sample_name]]$type[1]
+  )
   
-  
-  break_list[[sample_name]] <-
-    get_break_dates(
-      bfast_results[[sample_name]],
-      sample_name,
-      sample_type
-    )
+  break_list[[sample_name]] <- get_break_dates(
+    bfast_results[[sample_name]],
+    sample_name,
+    sample_type
+  )
 }
 
 
@@ -242,3 +238,66 @@ break_table <- bind_rows(
 
 # Tabelle anzeigen
 break_table
+
+
+
+#Ergebnisse als PNG speichern
+png(
+  filename = "BFAST_Lite_NDVI_2018_2025.png",
+  width = 3600,
+  height = 2400,
+  res = 300
+)
+
+par(
+  mfrow = c(3, 3),
+  mar = c(4, 4, 2.5, 1)
+)
+
+for (sample_name in names(bfast_results)) {
+  
+  plot(
+    bfast_results[[sample_name]],
+    breaks = "LWZ",
+    main = sample_name,
+    xlab = "Jahr",
+    ylab = "NDVI"
+  )
+}
+
+dev.off()
+
+# Plot-Einstellungen wieder zurücksetzen
+par(
+  mfrow = c(1, 1)
+)
+
+
+#auch NDVI Plots saven
+ndvi_plot <- ggplot(
+  time_series,
+  aes(
+    x = date,
+    y = NDVI
+  )
+) +
+  geom_line() +
+  facet_wrap(
+    ~ id,
+    ncol = 3
+  ) +
+  labs(
+    title = "Monatliche NDVI-Zeitreihen 2018-2025",
+    x = "Jahr",
+    y = "NDVI"
+  ) +
+  theme_minimal()
+
+ggsave(
+  filename = "NDVI_Zeitreihen_2018_2025.png",
+  plot = ndvi_plot,
+  width = 12,
+  height = 8,
+  units = "in",
+  dpi = 300
+)
