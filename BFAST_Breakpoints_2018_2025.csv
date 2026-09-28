@@ -1,0 +1,16 @@
+"id","type","break_date"
+"decline_1","detectedDecline",2019-03-01
+"decline_1","detectedDecline",2021-05-01
+"decline_1","detectedDecline",2023-01-01
+"decline_1","detectedDecline",2024-05-01
+"decline_2","detectedDecline",2019-02-01
+"decline_2","detectedDecline",2020-04-01
+"decline_3","detectedDecline",NA
+"new_1","newActive",NA
+"new_2","newActive",2024-08-01
+"new_3","newActive",2021-11-01
+"new_3","newActive",2023-04-01
+"new_3","newActive",2024-06-01
+"stable_1","stableActive",NA
+"stable_2","stableActive",NA
+"stable_3","stableActive",NA
