@@ -137,3 +137,27 @@ rownames(results) <- NULL
 
 # Ergebnisse
 print(results)
+
+
+
+# Gesamtsummen berechnen
+total_new <- sum(results$new_activity_ha, na.rm = TRUE)
+total_loss <- sum(results$activity_loss_ha, na.rm = TRUE)
+total_net <- sum(results$net_change_ha, na.rm = TRUE)
+
+# Gesamtzeile erstellen
+gesamt <- data.frame(
+  from_year = 2018,
+  to_year = 2025,
+  new_activity_ha = total_new,
+  activity_loss_ha = total_loss,
+  net_change_ha = total_net
+)
+
+# An Tabelle anhängen
+results_mit_gesamt <- rbind(
+  results,
+  gesamt
+)
+
+print(results_mit_gesamt)
