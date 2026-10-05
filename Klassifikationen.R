@@ -13,7 +13,7 @@ library(ggspatial)
 library(patchwork)
 
 # Daten einlesen
-data_dir <- 'C:/Users/longl/OneDrive - Universität Münster/Dokumente/GitHub/Bachelorthesis'
+data_dir <- 'C:/Users/longl/OneDrive - Universität Münster/Dokumente/GitHub/Bachelorthesis/Klassifikationen_GEE_Exporte'
 out_dir <- file.path(data_dir, 'Karten')
 if (!dir.exists(data_dir)) stop('Der Datenordner existiert nicht: ', data_dir)
 dir.create(out_dir, showWarnings = FALSE, recursive = TRUE)

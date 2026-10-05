@@ -1,6 +1,6 @@
 library(terra)
 
-folder <- "C:/Users/longl/OneDrive - Universität Münster/Dokumente/GitHub/Bachelorthesis"
+folder <- "C:/Users/longl/OneDrive - Universität Münster/Dokumente/GitHub/Bachelorthesis/ChangeDetection_2018_2025"
 files <- list.files(
   folder,
   pattern = "^NewDelta_Change_[0-9]{4}_[0-9]{4}\\.tif$",
