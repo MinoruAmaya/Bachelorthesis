@@ -11,12 +11,70 @@ library(sf)
 library(ggplot2)
 library(ggspatial)
 library(patchwork)
+library(ranger)
 
 # Daten einlesen
 data_dir <- 'C:/Users/longl/OneDrive - Universität Münster/Dokumente/GitHub/Bachelorthesis/Klassifikationen_GEE_Exporte'
 out_dir <- file.path(data_dir, 'Karten')
 if (!dir.exists(data_dir)) stop('Der Datenordner existiert nicht: ', data_dir)
 dir.create(out_dir, showWarnings = FALSE, recursive = TRUE)
+
+base_bands <- c(
+  "B2_median", "B3_median", "B4_median", "B5_median",
+  "B8_median", "B8A_median", "B11_median", "B12_median",
+  "NDVI_median", "NDVI_max", "NDVI_stdDev",
+  "NDMI_median", "NDRE_median", "BSI_median"
+)
+
+glcm_bands <- c(
+  base_bands,
+  "NDVI_texture_contrast",
+  "NDVI_texture_entropy",
+  "NDVI_texture_variance"
+)
+
+read_samples <- function(filename, bands) {
+  
+  path <- file.path(data_dir, filename)
+  
+  if (!file.exists(path)) {
+    stop("Datei fehlt: ", path)
+  }
+  
+  d <- read.csv(path, check.names = FALSE)
+  
+  required <- c(bands, "class")
+  
+  if (!all(required %in% names(d))) {
+    stop("Erforderliche Spalten fehlen in: ", filename)
+  }
+  
+  # Nur Prädiktoren und Referenzklasse übernehmen.
+  # Andere Exportspalten fließen nicht in das Training ein.
+  d <- d[, required, drop = FALSE]
+  
+  if (!all(vapply(d[bands], is.numeric, logical(1)))) {
+    stop("Prädiktoren müssen numerisch sein: ", filename)
+  }
+  
+  if (any(!is.finite(as.matrix(d[bands])))) {
+    stop("Fehlende oder ungültige Prädiktorwerte: ", filename)
+  }
+  
+  if (anyNA(d$class) || !all(d$class %in% 0:2)) {
+    stop("Ungültige Klassenwerte: ", filename)
+  }
+  
+  # Faktor erzwingt Klassifikation statt Regression.
+  d$class <- factor(d$class, levels = 0:2)
+  
+  if (any(table(d$class) == 0)) {
+    stop("Mindestens eine Klasse fehlt: ", filename)
+  }
+  
+  d
+}
+
 
 
 # Vorhandene Dateien anzeigen.
@@ -255,3 +313,128 @@ if (file.exists(rgb_file)) {
 # Ergebnis anzeigen und Softwareversionen dokumentieren
 print(comparison)
 message('Karten gespeichert in: ', out_dir)
+
+
+
+
+# Feature Importance an RF 
+analyse_rf <- function(training_file, validation_file,
+                       bands, model_name) {
+  
+  train <- read_samples(training_file, bands)
+  validation <- read_samples(validation_file, bands)
+  # Orientierung an bisherigen GEE-Einstellungen:
+  # 200 Bäume; sqrt(p) Kandidaten je Aufteilung;
+  # 70 % Stichprobenanteil je Baum.
+  #
+  # ranger und GEE/Smile sind unterschiedliche Implementierungen.
+  # Gleiche Zahlen garantieren keine identischen Modelle.
+  model <- ranger(
+    dependent.variable.name = "class",
+    data = train,
+    num.trees = 200,
+    mtry = floor(sqrt(length(bands))),
+    min.node.size = 1,
+    min.bucket = 2,
+    replace = FALSE,
+    sample.fraction = 0.7,
+    splitrule = "gini",
+    importance = "permutation",
+    scale.permutation.importance = FALSE,
+    seed = 42,
+    num.threads = 2
+  )
+  
+  # ranger berechnet diese Importance anhand der
+  # jeweiligen Out-of-bag-Beobachtungen.
+  importance <- data.frame(
+    predictor = names(model$variable.importance),
+    permutation_importance = unname(model$variable.importance)
+  )
+  
+  importance <- importance[
+    order(importance$permutation_importance, decreasing = TRUE),
+    ,
+    drop = FALSE
+  ]
+  
+  # Bewertung auf den ursprünglichen Hold-out-Daten.
+  prediction <- predict(
+    model,
+    data = validation[, bands, drop = FALSE]
+  )$predictions
+  
+  cm <- table(
+    Referenz = validation$class,
+    Vorhersage = factor(prediction, levels = 0:2)
+  )
+  
+  n <- sum(cm)
+  oa <- sum(diag(cm)) / n
+  
+  # Erwartete Übereinstimmung aus den Randverteilungen.
+  expected <- sum(rowSums(cm) * colSums(cm)) / n^2
+  
+  kappa <- if (expected < 1) {
+    (oa - expected) / (1 - expected)
+  } else {
+    NA_real_
+  }
+  
+  cat("\n", model_name, "\n", sep = "")
+  cat("Trainingspixel je Klasse:\n")
+  print(table(train$class))
+  
+  cat("Hold-out-Konfusionsmatrix:\n")
+  print(cm)
+  
+  cat(sprintf("Hold-out-OA: %.2f %%\n", oa * 100))
+  cat(sprintf("Hold-out-Kappa: %.3f\n", kappa))
+  
+  cat("Permutation Importance:\n")
+  print(importance, row.names = FALSE)
+  
+  # Darstellung im RStudio-Plots-Fenster.
+  old_par <- par(no.readonly = TRUE)
+  on.exit(par(old_par), add = TRUE)
+  
+  par(mar = c(5, 12, 4, 2))
+  
+  barplot(
+    rev(importance$permutation_importance),
+    names.arg = rev(importance$predictor),
+    horiz = TRUE,
+    las = 1,
+    cex.names = 0.75,
+    col = "#228B22",
+    main = paste(model_name, "– Permutation Importance"),
+    xlab = "Zunahme des OOB-Vorhersagefehlers"
+  )
+  
+  abline(v = 0, col = "grey40")
+  
+  list(
+    model = model,
+    importance = importance,
+    confusion_matrix = cm,
+    overall_accuracy = oa,
+    kappa = kappa
+  )
+}
+
+# Beide RF-Varianten untersuchen
+rf_r <- analyse_rf(
+  training_file = "NewDelta_RF_Training_2025.csv",
+  validation_file = "NewDelta_RF_Validation_2025.csv",
+  bands = base_bands,
+  model_name = "RF in R"
+)
+
+rf_glcm_r <- analyse_rf(
+  training_file = "NewDelta_RF_GLCM_Training_2025.csv",
+  validation_file = "NewDelta_RF_GLCM_Validation_2025.csv",
+  bands = glcm_bands,
+  model_name = "RF + GLCM in R"
+)
+
+

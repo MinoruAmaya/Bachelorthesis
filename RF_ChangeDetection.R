@@ -250,3 +250,364 @@ message("Fertig. PNG-Karten liegen in: ", map_dir)
 
 # Ergebnisordner im Windows-Explorer öffnen.
 shell.exec(normalizePath(map_dir, winslash = "\\"))
+
+
+
+
+
+
+# Flächenberechnung
+berechne_rf_flaechen <- function(eingangsordner) {
+  
+  if (!requireNamespace("terra", quietly = TRUE)) {
+    stop("Bitte zunächst install.packages('terra') ausführen.")
+  }
+  
+  message("START: Flächenberechnung der RF-Postklassifikation.")
+  
+  jahre <- 2018:2025
+  
+  dateien <- file.path(
+    eingangsordner,
+    paste0(
+      "NewDelta_geometry2_RF_Classification_",
+      jahre,
+      ".tif"
+    )
+  )
+  
+  fehlende_dateien <- dateien[!file.exists(dateien)]
+  
+  if (length(fehlende_dateien)) {
+    stop(
+      "Diese Jahresraster fehlen:\n",
+      paste(basename(fehlende_dateien), collapse = "\n")
+    )
+  }
+  
+  ausgabeordner <- file.path(
+    eingangsordner,
+    "Flaechen_Postklassifikation"
+  )
+  
+  dir.create(
+    ausgabeordner,
+    recursive = TRUE,
+    showWarnings = FALSE
+  )
+  
+  csv_flaechen <- file.path(
+    ausgabeordner,
+    "RF_Postklassifikation_Flaechen.csv"
+  )
+  
+  csv_bilanz <- file.path(
+    ausgabeordner,
+    "RF_Postklassifikation_Flaechenbilanz.csv"
+  )
+  
+  kategorien <- c(
+    "Unbewachsener Boden in beiden Jahren",
+    "Landwirtschaft in beiden Jahren",
+    "Mögliche Zunahme der Landwirtschaft",
+    "Möglicher Rückgang der Landwirtschaft"
+  )
+  
+  # Übergangscode -> Reihenfolge der Kartenlegende.
+  umkodierung <- matrix(
+    c(
+      0, 0,  # Boden -> Boden
+      1, 2,  # Boden -> Landwirtschaft
+      2, 3,  # Landwirtschaft -> Boden
+      3, 1   # Landwirtschaft -> Landwirtschaft
+    ),
+    ncol = 2,
+    byrow = TRUE
+  )
+  
+  
+  # lokale Arbeitsdateien außerhalb von OneDrive
+  lokale_basis <- Sys.getenv("LOCALAPPDATA")
+  if (!nzchar(lokale_basis)) lokale_basis <- tempdir()
+  
+  arbeitsbasis <- file.path(
+    lokale_basis,
+    "NewDelta_R_Arbeitsdateien"
+  )
+  
+  dir.create(
+    arbeitsbasis,
+    recursive = TRUE,
+    showWarnings = FALSE
+  )
+  
+  schreibtest <- tempfile(tmpdir = arbeitsbasis)
+  
+  if (!file.create(schreibtest)) {
+    stop("Kein Schreibzugriff auf: ", arbeitsbasis)
+  }
+  
+  unlink(schreibtest)
+  
+  terra::terraOptions(
+    tempdir = arbeitsbasis,
+    memfrac = 0.5,
+    progress = 1
+  )
+  
+  # Eigenes Unterverzeichnis für diesen Berechnungslauf.
+  laufordner <- tempfile(
+    pattern = "RF_Flaechen_",
+    tmpdir = arbeitsbasis
+  )
+  
+  if (!dir.create(laufordner)) {
+    stop("Arbeitsverzeichnis konnte nicht angelegt werden.")
+  }
+  
+  # Nur die Arbeitsdateien dieses Laufs anschließend entfernen.
+  on.exit(
+    unlink(laufordner, recursive = TRUE),
+    add = TRUE
+  )
+  
+  
+  # Jahresraster öffnen und gemeinsames Rastergitter prüfen
+  raster <- setNames(
+    lapply(dateien, terra::rast),
+    as.character(jahre)
+  )
+  
+  referenz <- raster[[1]]
+  
+  if (!nzchar(terra::crs(referenz))) {
+    stop("Das Koordinatenreferenzsystem fehlt.")
+  }
+  
+  for (j in seq_along(raster)) {
+    
+    if (terra::nlyr(raster[[j]]) != 1L) {
+      stop("Jahresraster benötigt genau ein Band: ", jahre[j])
+    }
+    
+    terra::compareGeom(
+      referenz,
+      raster[[j]],
+      stopOnError = TRUE
+    )
+  }
+  
+  message("Alle Jahresraster geöffnet; Rastergitter stimmen überein.")
+  
+  
+  
+  # Vollständige Klassenwerte prüfen und NoData entfernen
+  for (j in seq_along(raster)) {
+    
+    message("Prüfe ursprüngliches Jahresraster: ", jahre[j])
+    
+    haeufigkeiten <- terra::freq(
+      raster[[j]],
+      digits = NA
+    )
+    
+    if (is.null(haeufigkeiten) || !nrow(haeufigkeiten)) {
+      stop("Keine auswertbaren Werte im Jahr ", jahre[j])
+    }
+    
+    if (any(!haeufigkeiten$value %in% c(0:2, 255))) {
+      stop("Unerwartete Klassenwerte im Jahr ", jahre[j])
+    }
+    
+    if (!any(haeufigkeiten$value %in% 0:2)) {
+      stop("Keine gültigen Klassenpixel im Jahr ", jahre[j])
+    }
+    
+    # Bereinigte Arbeitsdatei auf dem unveränderten Rastergitter.
+    # 255 wird ausdrücklich als NA behandelt.
+    raster[[j]] <- terra::classify(
+      raster[[j]],
+      rcl = matrix(c(255, NA_real_), ncol = 2),
+      filename = file.path(
+        laufordner,
+        paste0("Klassen_", jahre[j], ".tif")
+      ),
+      wopt = list(
+        datatype = "INT1U",
+        NAflag = 255
+      )
+    )
+    
+    message("Jahresraster bereit: ", jahre[j])
+  }
+  
+  referenz <- raster[[1]]
+  
+  
+  # Zellflächen einmal in Hektar berechnen
+  message("Berechne Zellflächen in Hektar …")
+  
+  zellflaechen <- terra::cellSize(
+    referenz,
+    unit = "ha",
+    mask = FALSE,
+    transform = TRUE,
+    rcx = 100,
+    filename = file.path(laufordner, "Zellflaechen_ha.tif"),
+    datatype = "FLT8S"
+  )
+  
+  # transform = TRUE berücksichtigt Projektionsverzerrungen.
+  # rcx = 100 beschleunigt die Zellflächenberechnung durch
+  # Interpolation. Die Klassenraster werden nicht vergröbert.
+  
+  message("Zellflächen fertig. Beginne die Jahresvergleiche.")
+  
+  flaechen_liste <- list()
+  bilanz_liste <- list()
+  
+  
+  
+  # Alle sieben Jahresübergänge auswerten
+  for (k in seq_len(length(jahre) - 1L)) {
+    
+    jahr_vorher <- jahre[k]
+    jahr_nachher <- jahre[k + 1L]
+    
+    paar <- paste(jahr_vorher, jahr_nachher, sep = "_")
+    
+    message(
+      "Berechne Übergang ",
+      k, "/7: ",
+      jahr_vorher, " → ", jahr_nachher
+    )
+    
+    vorher <- raster[[as.character(jahr_vorher)]]
+    nachher <- raster[[as.character(jahr_nachher)]]
+    
+    # Pivotfelder und andere Landwirtschaft zusammenfassen.
+    # NA in einem Jahr bleibt im Ergebnis NA.
+    paarcode <- 2L * (vorher > 0) + (nachher > 0)
+    
+    wechseldatei <- file.path(
+      laufordner,
+      paste0("Veraenderung_", paar, ".tif")
+    )
+    
+    wechsel <- terra::classify(
+      paarcode,
+      rcl = umkodierung,
+      others = NA,
+      filename = wechseldatei,
+      wopt = list(
+        datatype = "INT1U",
+        NAflag = 255
+      )
+    )
+    
+    message("Summiere Flächen für ", paar, " …")
+    
+    summen <- terra::zonal(
+      zellflaechen,
+      wechsel,
+      fun = "sum",
+      na.rm = TRUE
+    )
+    
+    if (is.null(summen) || !nrow(summen)) {
+      stop("Keine gemeinsam gültigen Pixel: ", paar)
+    }
+    
+    positionen <- match(summen[[1]], 0:3)
+    
+    if (anyNA(positionen)) {
+      stop("Unerwartete Veränderungskategorie: ", paar)
+    }
+    
+    # Nicht vorkommende Kategorien erhalten 0 ha.
+    hektar <- rep(0, 4)
+    hektar[positionen] <- summen[[2]]
+    
+    vergleichsflaeche <- sum(hektar)
+    
+    if (
+      any(!is.finite(hektar)) ||
+      vergleichsflaeche <= 0
+    ) {
+      stop("Keine gültige Flächensumme: ", paar)
+    }
+    
+    flaechen_liste[[paar]] <- data.frame(
+      from_year = jahr_vorher,
+      to_year = jahr_nachher,
+      code = 0:3,
+      category = kategorien,
+      area_ha = hektar,
+      percent_common_valid_area =
+        100 * hektar / vergleichsflaeche
+    )
+    
+    bilanz_liste[[paar]] <- data.frame(
+      from_year = jahr_vorher,
+      to_year = jahr_nachher,
+      common_valid_area_ha = vergleichsflaeche,
+      stable_agriculture_ha = hektar[2],
+      possible_gain_ha = hektar[3],
+      possible_loss_ha = hektar[4],
+      net_change_ha = hektar[3] - hektar[4]
+    )
+    
+    # Ergebnis sofort in der Konsole zeigen.
+    message("Fertig: ", jahr_vorher, " → ", jahr_nachher)
+    print(bilanz_liste[[paar]], row.names = FALSE)
+    
+    # Nach jedem fertigen Übergang speichern.
+    # CSV-Dateien mit diesen Namen werden aktualisiert.
+    flaechen <- do.call(rbind, flaechen_liste)
+    bilanz <- do.call(rbind, bilanz_liste)
+    
+    write.csv(
+      flaechen,
+      csv_flaechen,
+      row.names = FALSE,
+      fileEncoding = "UTF-8"
+    )
+    
+    write.csv(
+      bilanz,
+      csv_bilanz,
+      row.names = FALSE,
+      fileEncoding = "UTF-8"
+    )
+    
+    rm(wechsel, paarcode, vorher, nachher)
+    unlink(wechseldatei)
+    
+    message("CSV-Tabellen aktualisiert.")
+  }
+  
+  
+  # Gesamtergebnis ausgeben
+  message("GESAMTE FLÄCHENBILANZ IN HEKTAR:")
+  print(bilanz, row.names = FALSE)
+  
+  message("Flächentabelle: ", csv_flaechen)
+  message("Flächenbilanz: ", csv_bilanz)
+  message("Flächenberechnung abgeschlossen.")
+  
+  invisible(list(
+    areas = flaechen,
+    balance = bilanz
+  ))
+}
+
+# Berechnung starten
+rf_flaechen <- berechne_rf_flaechen(
+  eingangsordner = paste0(
+    "C:/Users/longl/OneDrive - Universität Münster/",
+    "Dokumente/GitHub/Bachelorthesis/",
+    "ChangeDetection_Postklassifikation"
+  )
+)
+
+
