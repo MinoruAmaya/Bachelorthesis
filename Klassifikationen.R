@@ -210,8 +210,8 @@ decorate <- function(p) {
 # as.data.frame(..., xy=TRUE) liefert Pixelmittelpunkte und Klassenwerte.
 # na.rm=FALSE erhält auch leere Zellen: NoData erscheint weiß.
 # Faktor mit festen Levels: identische Farben und vollständige Legende in jeder Karte.
-# geom_tile zeichnet die Pixel mit ihrer tatsächlichen Breite und Höhe.
-# OA wird nur für die Beschriftung mit 100 multipliziert; Kappa bleibt unverändert.
+# geom_raster() stellt die Klassenwerte des regelmäßigen Rastergitters dar.
+# In Verbindung mit coord_sf() kann ggplot2 auf Rechtecke zurückgreifen.
 plots <- lapply(seq_along(models), function(i) {
   d <- as.data.frame(rasters[[i]], xy = TRUE, na.rm = FALSE)
   names(d)[3] <- 'class'
