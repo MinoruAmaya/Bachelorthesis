@@ -1,0 +1,501 @@
+/**** Start of imports. If edited, may not auto-convert in the playground. ****/
+var geometry = 
+    /* color: #d63000 */
+    /* shown: false */
+    /* displayProperties: [
+      {
+        "type": "rectangle"
+      }
+    ] */
+    ee.Geometry.Polygon(
+        [[[28.436122693569942, 30.6649716602594],
+          [28.436122693569942, 29.62468826784062],
+          [30.976711072476192, 29.62468826784062],
+          [30.976711072476192, 30.6649716602594]]], null, false),
+    newActive1 = /* color: #d67491 */ee.Geometry.Point([29.98876287414319, 30.065834396107373]),
+    newActive2 = /* color: #98ff00 */ee.Geometry.Point([30.008448874738242, 30.004330698022684]),
+    newActive3 = /* color: #86ffcb */ee.Geometry.Point([30.091494412619372, 30.117031450491908]),
+    detectedDecline1 = /* color: #2dd66e */ee.Geometry.Point([30.209843659655277, 30.057683215888506]),
+    stableActive1 = /* color: #d63000 */ee.Geometry.Point([30.397362610184533, 30.157149097088627]),
+    stableActive2 = /* color: #61ceff */ee.Geometry.Point([30.404829880081994, 30.226041581490122]),
+    detectedDecline2 = /* color: #0b4a8b */ee.Feature(
+        ee.Geometry.Point([30.18385064248678, 30.13943465958232]),
+        {
+          "system:index": "0"
+        }),
+    detectedDecline3 = /* color: #ffc82d */ee.Geometry.Point([30.435578724228723, 30.179521949678612]),
+    stableActive3 = /* color: #00ffff */ee.Geometry.Point([30.432091852509362, 30.122772949120062]),
+    desertControl = /* color: #7197d6 */ee.Geometry.Point([28.982557586032083, 30.008535297289246]);
+/***** End of imports. If edited, may not auto-convert in the playground. *****/
+// pixelbasierten Zeitreihe
+// Was man braucht: 
+// 9 Samples:
+// 3 detectedDecline (ACHTUNG: bedeutet nicht immer, dass er in Brache oder so umwandelt, sondern könnte auch in dem Jahr ne Pause gelegt haben)
+// 3 stableActive, die bereits vor 2018 angebaut und bis heute aktiv sind
+// 3 newActive, die in unterschiedlichen Jahren dazugekommen sind, siehe Change Detection
+
+
+// Zeitraum: 2018-2025
+// Teilautomatisierte Erkennung der Ausbreitung neuer
+// agroindustrieller Bewässerungsflächen.
+
+// Durchführung: in GEE werden die Zeitreihendaten der Buffer berechnet und exportiert, R wird eine weiterführende Analyse durchführen und auch visuell darstellen.
+
+var aoi= 
+    /* color: #d63000 */
+    /* shown: false */
+    /* displayProperties: [
+      {
+        "type": "rectangle"
+      }
+    ] */
+    geometry;
+Map.centerObject(aoi, 11);
+
+// Zu den Punktgeometrien soll ein 50-Buffer um die Punktgeometrien gemacht werden 
+// SamplePoints definieren in einer FeatureCollection mit den importierten Punktgeometrien
+var samplePoints = ee.FeatureCollection([
+
+  ee.Feature(stableActive1).set({
+    id: 'stable_1',
+    type: 'stableActive'
+  }),
+
+  ee.Feature(stableActive2).set({
+    id: 'stable_2',
+    type: 'stableActive'
+  }),
+
+  ee.Feature(stableActive3).set({
+    id: 'stable_3',
+    type: 'stableActive'
+  }),
+
+  ee.Feature(newActive1).set({
+    id: 'new_1',
+    type: 'newActive'
+  }),
+
+  ee.Feature(newActive2).set({
+    id: 'new_2',
+    type: 'newActive'
+  }),
+
+  ee.Feature(newActive3).set({
+    id: 'new_3',
+    type: 'newActive'
+  }),
+
+  ee.Feature(detectedDecline1).set({
+    id: 'decline_1',
+    type: 'detectedDecline'
+  }),
+
+  ee.Feature(detectedDecline2).set({
+    id: 'decline_2',
+    type: 'detectedDecline'
+  }),
+
+  ee.Feature(detectedDecline3).set({
+    id: 'decline_3',
+    type: 'detectedDecline'
+  })
+
+]);
+
+// Buffer automatisch erstellen
+var sampleAreas = samplePoints.map(function(feature) {
+
+  return ee.Feature(
+    feature.geometry().buffer(50)
+  )
+  .copyProperties(feature);
+
+});
+
+// Für die Validierung der Indexwerte später soll noch ein Wüstenbuffer estellt werden, dieser ist nicht Teil der Zeitreihensamples
+var desertControlArea = ee.FeatureCollection([
+  ee.Feature(
+    ee.Feature(desertControl)
+      .geometry()
+      .buffer(50)
+  ).set({
+    id: 'desert_control',
+    type: 'desert'
+  })
+]);
+
+Map.addLayer(
+  desertControlArea,
+  {color: 'red'},
+  'Wüsten-Kontrollfläche'
+);
+
+// Buffer-Kontrolle
+Map.addLayer(
+  samplePoints,
+  {color: 'yellow'},
+  'Stichprobenpunkte'
+);
+
+Map.addLayer(
+  sampleAreas,
+  {color: 'cyan'},
+  '50-m-Buffer'
+);
+
+
+// monatliche S2-Komposite erstellen, und die Werte im Buffer zusammenfassen, und auch als CSV Export für spätere Kontrolle mit R
+
+
+var startDate = '2018-01-01';
+var endDate   = '2026-01-01';   
+
+// Sentinel-2 wird nur für die Stichproben- und Kontrollflächen geladen,
+// um den Rechenaufwand zu reduzieren.
+var processingAreas = sampleAreas
+  .merge(desertControlArea);
+  
+  
+  
+  
+var s2 = ee.ImageCollection(
+  'COPERNICUS/S2_SR_HARMONIZED'
+)
+.filterBounds(processingAreas.geometry())
+.filterDate(startDate, endDate)
+.filter(
+  ee.Filter.lt(
+    'CLOUDY_PIXEL_PERCENTAGE',
+    40
+  )
+);
+
+
+function prepareSentinel2(image) {
+
+  var scl = image.select('SCL');
+
+  var validMask = scl
+    .neq(0)                 // No Data
+    .and(scl.neq(1))        // defekte/gesättigte Pixel
+    .and(scl.neq(3))        // Wolkenschatten
+    .and(scl.neq(8))        // Wolken
+    .and(scl.neq(9))        // Wolken
+    .and(scl.neq(10))       // Cirrus
+    .and(scl.neq(11));      // Schnee/Eis
+
+
+  var reflectance = image
+    .select([
+      'B2',
+      'B3',
+      'B4',
+      'B5',
+      'B6',
+      'B7',
+      'B8',
+      'B8A',
+      'B11',
+      'B12'
+    ])
+    .multiply(0.0001)
+    .updateMask(validMask);
+
+
+  var ndvi = reflectance
+    .normalizedDifference([
+      'B8',
+      'B4'
+    ])
+    .rename('NDVI');
+
+
+  var ndre = reflectance
+    .normalizedDifference([
+      'B8A',
+      'B5'
+    ])
+    .rename('NDRE');
+
+
+  var ndmi = reflectance
+    .normalizedDifference([
+      'B8',
+      'B11'
+    ])
+    .rename('NDMI');
+
+
+  var ndwi = reflectance
+    .normalizedDifference([
+      'B3',
+      'B8'
+    ])
+    .rename('NDWI');
+
+
+  var bsi = reflectance.expression(
+    '((SWIR + RED) - (NIR + BLUE)) / ' +
+    '((SWIR + RED) + (NIR + BLUE))',
+    {
+      SWIR: reflectance.select('B11'),
+      RED: reflectance.select('B4'),
+      NIR: reflectance.select('B8'),
+      BLUE: reflectance.select('B2')
+    }
+  ).rename('BSI');
+
+
+  return reflectance
+    .addBands([
+      ndvi,
+      ndre,
+      ndmi,
+      ndwi,
+      bsi
+    ])
+    .copyProperties(
+      image,
+      ['system:time_start']
+    );
+}
+
+
+var prepared = s2.map(
+  prepareSentinel2
+);
+
+// Monatliche Zeitreihe
+var numberOfMonths = ee.Date(endDate)
+  .difference(
+    ee.Date(startDate),
+    'month'
+  )
+  .toInt();
+
+
+var monthNumbers = ee.List.sequence(
+  0,
+  numberOfMonths.subtract(1)
+);
+
+
+var monthlyTables = monthNumbers.map(function(monthNumber) {
+
+  monthNumber = ee.Number(monthNumber);
+
+
+  var monthStart = ee.Date(startDate)
+    .advance(
+      monthNumber,
+      'month'
+    );
+
+  var monthEnd = monthStart.advance(
+    1,
+    'month'
+  );
+
+
+  // Alle vorbereiteten Aufnahmen dieses einzelnen Monats
+  var imagesInMonth = prepared.filterDate(
+    monthStart,
+    monthEnd
+  );
+
+
+  // Zeitlicher Median dieses Monats
+  var monthlyMedian = imagesInMonth
+    .select([
+      'NDVI',
+      'NDRE',
+      'NDMI',
+      'NDWI',
+      'BSI'
+    ])
+    .median();
+// Anzahl gültiger NDVI-Beobachtungen je Pixel
+// nach der SCL-Maskierung.
+// Beim späteren reduceRegions() wird daraus der Median
+// der Beobachtungsanzahl innerhalb des jeweiligen Buffers.
+  var observationCount = imagesInMonth
+    .select('NDVI')
+    .count()
+    .rename('observation_count');
+  
+  
+  // Dem Monatskomposit hinzufügen
+  monthlyMedian = monthlyMedian
+    .addBands(observationCount);
+
+  // Räumlicher Median innerhalb der 9 Buffer
+  var bufferStatistics = monthlyMedian.reduceRegions({
+    collection: sampleAreas,
+    reducer: ee.Reducer.median(),
+    scale: 20
+  });
+
+
+  // Monat + Anzahl verwendeter S2-Bilder mitgeben
+  return bufferStatistics.map(function(feature) {
+
+    return ee.Feature(feature).set({
+      date: monthStart.format('YYYY-MM'),
+      year: monthStart.get('year'),
+      month: monthStart.get('month'),
+      image_count: imagesInMonth.size()
+    });
+
+  });
+
+});
+
+var timeSeries = ee.FeatureCollection(
+  monthlyTables
+).flatten();
+
+// Kontrolle
+// print('Anzahl Zeitreiheneinträge:', timeSeries.size());
+// print('Erste 10 Zeitreiheneinträge:', timeSeries.limit(10));
+// print('Spalten:', ee.Feature(timeSeries.first()).propertyNames());
+
+print('Anzahl Monate:', numberOfMonths);
+print('Anzahl Samples:', sampleAreas.size());
+
+
+
+
+// schneller Kontrolltest:
+// 1 Monat und 1 Sample
+var testMonthStart = ee.Date('2022-01-01');
+var testMonthEnd   = testMonthStart.advance(1, 'month');
+
+var testImages = prepared.filterDate(
+  testMonthStart,
+  testMonthEnd
+);
+
+var testMedian = testImages
+  .select([
+    'NDVI',
+    'NDRE',
+    'NDMI',
+    'NDWI',
+    'BSI'
+  ])
+  .median();
+
+var testSample = ee.FeatureCollection([
+  sampleAreas.first()
+]);
+
+var testResult = testMedian.reduceRegions({
+  collection: testSample,
+  reducer: ee.Reducer.median(),
+  scale: 20
+});
+
+print('TEST – Anzahl S2-Bilder im Monat:', testImages.size());
+print('TEST – Ergebnis:', testResult);
+
+
+
+
+// Export nur aggregierte Monatswerte der 9 Buffer (also die Zeitreihendaten), keine Geometrien, Keine einzelnen Pixel, keine S2 Bilder
+
+Export.table.toDrive({
+  collection: timeSeries,
+
+  description:
+    'NewDelta_TimeSeries_2018_2025',
+
+  folder:
+    'GEE_TimeSeries',
+
+  fileFormat:
+    'CSV',
+
+  selectors: [
+    'id',
+    'type',
+    'date',
+    'year',
+    'month',
+    'NDVI',
+    'NDRE',
+    'NDMI',
+    'NDWI',
+    'BSI',
+    'observation_count',
+    'image_count'
+  ]
+});
+
+
+
+
+// Plausibilitätskontrolle der Indexwerte anhand eines Beispielmonats und 3 testflächen
+
+// Beispielmonat festlegen
+var validationStart = ee.Date('2022-07-01');
+var validationEnd   = validationStart.advance(1, 'month');
+
+
+// Sentinel-2-Aufnahmen dieses Monats
+var validationImages = prepared.filterDate(
+  validationStart,
+  validationEnd
+);
+
+
+// Monatsmedian der relevanten Bänder + Indizes
+var validationMedian = validationImages
+  .select([
+    'B2',
+    'B3',
+    'B4',
+    'B5',
+    'B8',
+    'B8A',
+    'B11',
+    'NDVI',
+    'NDRE',
+    'NDMI',
+    'NDWI',
+    'BSI'
+  ])
+  .median();
+
+// testflächen auswählen
+// aktives Feld
+var stableValidation = sampleAreas.filter(
+  ee.Filter.eq('id', 'stable_1')
+);
+// neu erkannte flächen
+var newValidation = sampleAreas.filter(
+  ee.Filter.eq('id', 'new_1')
+);
+
+// Alle 3 Testflächen zusammenführen
+var validationAreas = stableValidation
+  .merge(newValidation)
+  .merge(desertControlArea);
+
+
+// Median-Werte Je Testfläche
+var validationResults = validationMedian.reduceRegions({
+  collection: validationAreas,
+  reducer: ee.Reducer.median(),
+  scale: 20
+});
+
+print(
+  'VALIDIERUNG – Anzahl S2-Bilder:',
+  validationImages.size()
+);
+
+print(
+  'VALIDIERUNG – Ergebnisse:',
+  validationResults
+);
