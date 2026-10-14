@@ -128,12 +128,12 @@ for (i in seq_len(length(years) - 1L)) {
   valid <- complete.cases(d[, c("before", "after")])
   
   if (!any(valid)) {
-    stop("Keine gemeinsam gültigen Pixel: ", from_year, "–", to_year)
+    stop("Keine gemeinsam gültigen Pixel: ", from_year, "-", to_year)
   }
   
   if (any(!d$before[valid] %in% 0:2) ||
       any(!d$after[valid] %in% 0:2)) {
-    stop("Unerwartete Klassenwerte: ", from_year, "–", to_year)
+    stop("Unerwartete Klassenwerte: ", from_year, "-", to_year)
   }
   
   
@@ -195,7 +195,7 @@ for (i in seq_len(length(years) - 1L)) {
     labs(
       title = paste0(
         "New Delta: Landwirtschaftsveränderung ",
-        from_year, "–", to_year
+        from_year, "-", to_year
       ),
       subtitle = "Postklassifikationsvergleich der jährlichen RF-Karten",
       caption = paste0(

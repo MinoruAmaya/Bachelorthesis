@@ -234,28 +234,20 @@ run_bfast <- function(sample_data) {
   # Zeitlich sortieren
   sample_data <- sample_data %>%
     arrange(date)
-  
-  
   # Monatliche NDVI-Zeitreihe definieren
   ndvi_ts <- ts(
     sample_data$NDVI,
     start = c(2018, 1),
     frequency = 12
   )
-  
-  
   # BFAST Lite anwenden
   model <- bfastlite(
     ndvi_ts
   )
-  
-  
   return(model)
 }
 
-
 #Daten auf die neun Stcihproben aufteilen
-
 sample_list <- split(
   time_series,
   time_series$id
